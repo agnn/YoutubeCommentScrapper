@@ -1,25 +1,26 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS, cross_origin
 from requests_html import AsyncHTMLSession
 import asyncio, pyppeteer, os, requests
 import mysql.connector as conn
 import base64
 import pymongo
+import pandas as pd
 
 app = Flask(__name__)
 
-host = 'localhost'  # use your own host name of mysql database
-user = 'root'  # use your own user name of Mysql database
-password = 'password'  # use your own password
-
-# please use your own mongodb atlas credential below and your own database and collection name
-client = pymongo.MongoClient(
-    "mongodb+srv://<user name>:<password>@agnik0.mmtem.mongodb.net/?retryWrites=true&w=majority")
+host = 'appdbscrapper.curso3av0eit.us-east-1.rds.amazonaws.com'
+user = 'admin'
+'''
+host = 'localhost'
+user = 'root'
+'''
+client = pymongo.MongoClient("mongodb+srv://achowdh:failsafe@agnik0.mmtem.mongodb.net/?retryWrites=true&w=majority")
 db = client.test
-database = client['<database name>']
-collection = database["<colletion name>"]
+database = client['YoutubeScrapper']
+collection = database["image64"]
 
-mydb = conn.connect(host=host, user=user, passwd=password)
+mydb = conn.connect(host=host, user=user, passwd="Failsafeauto#1")
 cursor = mydb.cursor()
 cursor.execute("USE dbYoutube")
 
@@ -33,8 +34,7 @@ cursor.execute(query_1)
 mydb.commit()
 
 
-def insert_data(dict_values):  # to insert data into database of links channels
-
+def insert_data(dict_values):
     try:
         # mydb = conn.connect(host="localhost", user="root", passwd="Failsafeauto#1")
         # cursor = mydb.cursor()
@@ -54,7 +54,7 @@ def insert_data(dict_values):  # to insert data into database of links channels
         print(f"unable to insert data into database(links_table) :", e)
 
 
-def insert_data_details(dict_values):  # to insert data into databas of video details
+def insert_data_details(dict_values):
     try:
         # mydb = conn.connect(host="localhost", user="root", passwd="Failsafeauto#1")
         # cursor = mydb.cursor()
@@ -67,7 +67,16 @@ def insert_data_details(dict_values):  # to insert data into databas of video de
 
         cursor.execute(query)
         mydb.commit()
-        print("data inserted into video._details_table")
+
+        query1 = "UPDATE dbYoutube.video_details_table SET vid_likes = \"{}\", vid_views = \"{}\", vid_comments = \"{}\" WHERE video_id = \'{}\'".format(
+            dict_values['vid_likes'],
+            dict_values['vid_view'],
+            dict_values['vid_comments'],
+            dict_values['vid_id'])
+
+        cursor.execute(query1)
+        mydb.commit()
+        # print("data inserted into video_details_table")
 
 
     except Exception as e:
@@ -76,8 +85,6 @@ def insert_data_details(dict_values):  # to insert data into databas of video de
 
 
 async def scrap_video_content(url):
-    'Async fucntion to scrap video contents including comments of clicked video'
-
     new_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(new_loop)
     session = AsyncHTMLSession()
@@ -92,7 +99,7 @@ async def scrap_video_content(url):
     session._browser = browser
     r = await session.get(url)
 
-    await r.html.arender(sleep=1, keep_page=True, scrolldown=30)
+    await r.html.arender(sleep=1, keep_page=True, scrolldown=50)
 
     views = r.html.find('span.view-count.style-scope.ytd-video-view-count-renderer')
     likes = r.html.find('yt-formatted-string#text.style-scope.ytd-toggle-button-renderer.style-text')
@@ -127,8 +134,6 @@ async def scrap_video_content(url):
 
 
 async def scrap_video_url(u):
-    'Async function to scrap videos of any channel'
-
     new_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(new_loop)
     session = AsyncHTMLSession()
@@ -143,7 +148,7 @@ async def scrap_video_url(u):
     session._browser = browser
     r = await session.get(u)
 
-    await r.html.arender(sleep=1, keep_page=True, scrolldown=8)
+    await r.html.arender(sleep=1, keep_page=True, scrolldown=15)
 
     video_titles = ([item.text for item in r.html.find('#video-title')])
 
@@ -166,8 +171,6 @@ async def scrap_video_url(u):
 
 
 def youtubechannel_id(url):
-    'This function will help you to find the channel name '
-
     reverse_s = url[::-1]
     start = reverse_s.find('/')
     trunc_s = reverse_s[start + 1:]
@@ -177,7 +180,37 @@ def youtubechannel_id(url):
     return final_s
 
 
-@app.route('/scrapl', methods=['POST', 'GET'])  # route to get video contents
+@app.route('/scrapl/<vid_id>', methods=['GET', 'POST'])
+@cross_origin()
+def retrieve_data(vid_id):
+
+    try:
+        if not os.path.exists('./comments-data'):
+            os.makedirs('./comments-data')
+
+        if os.path.exists(f"./comments-data/comments-{vid_id}.xlsx"):
+            os.remove(f"./comments-data/comments-{vid_id}.xlsx")
+
+        commentdata = collection.find({'vid_id': vid_id})
+        listofcomments = []
+
+        for i in commentdata:
+            listofcomments.append((i['comment_author'], i['comment']))
+
+        fi = pd.DataFrame(data=listofcomments, columns=['Author', 'Comment'])
+        fi = fi.drop_duplicates()
+
+        fi.to_excel(f"./comments-data/comments-{vid_id}.xlsx")
+        file_to_send = f"./comments-data/comments-{vid_id}.xlsx"
+
+    except Exception as e:
+
+        print(f"Unable to download file")
+
+    return send_file(file_to_send, as_attachment=True)
+
+
+@app.route('/scrapl', methods=['POST', 'GET'])
 @cross_origin()
 def try_page():
     if request.method == 'POST':
@@ -208,7 +241,13 @@ def try_page():
                     "comment": i[1]
                 }
 
-                collection.insert_one(write_comment)
+
+                if collection.find_one({'$and': [{'vid_id':sub_launch[0][0]}, {'comment_author': i[0]}, {'comment':i[1]}]}) == None:
+
+                    collection.insert_one(write_comment)
+                    print("comment inserted")
+                else:
+                    print("comment already exists , hence skipped database process")
 
             list_to_pass = []
             list_to_pass.append(d)
@@ -279,7 +318,7 @@ def test_run():
         return render_template('index.html')
 
 
-def save_thumbnail(folder_path: str, url: str, vid_id): # this function will save the image to local folder and also to database
+def save_thumbnail(folder_path: str, url: str, vid_id):
     try:
         image_content = requests.get(url).content
         convert64 = base64.b64encode(image_content)
